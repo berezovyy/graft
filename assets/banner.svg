@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0d1117"/>
+      <stop offset="100%" style="stop-color:#161b22"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#58a6ff"/>
+      <stop offset="100%" style="stop-color:#a371f7"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#58a6ff;stop-opacity:0.3"/>
+      <stop offset="100%" style="stop-color:#a371f7;stop-opacity:0.3"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="800" height="200" rx="12" fill="url(#bg)"/>
+  <rect x="1" y="1" width="798" height="198" rx="11" fill="none" stroke="url(#accent)" stroke-opacity="0.2" stroke-width="1"/>
+
+  <!-- Tree/branch graft icon -->
+  <g transform="translate(240, 55)">
+    <!-- Main trunk -->
+    <line x1="40" y1="90" x2="40" y2="30" stroke="#8b949e" stroke-width="3" stroke-linecap="round"/>
+    <!-- Original branch -->
+    <line x1="40" y1="50" x2="15" y2="25" stroke="#8b949e" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="15" cy="22" r="5" fill="#8b949e"/>
+    <!-- Grafted branch -->
+    <line x1="40" y1="50" x2="65" y2="20" stroke="url(#accent)" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="65" cy="17" r="5" fill="#a371f7"/>
+    <!-- Graft point indicator -->
+    <circle cx="40" cy="50" r="4" fill="#58a6ff"/>
+    <circle cx="40" cy="50" r="8" fill="none" stroke="#58a6ff" stroke-opacity="0.3" stroke-width="2"/>
+    <!-- Root -->
+    <circle cx="40" cy="92" r="4" fill="#8b949e"/>
+  </g>
+
+  <!-- Title -->
+  <text x="330" y="95" font-family="'SF Mono', 'Fira Code', 'JetBrains Mono', 'Cascadia Code', monospace" font-size="52" font-weight="700" fill="url(#accent)">graft</text>
+
+  <!-- Tagline -->
+  <text x="330" y="125" font-family="'SF Pro Display', 'Inter', -apple-system, system-ui, sans-serif" font-size="15" fill="#8b949e">fork() for your project directory</text>
+
+  <!-- Decorative dots -->
+  <circle cx="720" cy="40" r="2" fill="#58a6ff" opacity="0.4"/>
+  <circle cx="740" cy="55" r="1.5" fill="#a371f7" opacity="0.3"/>
+  <circle cx="710" cy="65" r="1" fill="#58a6ff" opacity="0.2"/>
+  <circle cx="80" cy="150" r="2" fill="#a371f7" opacity="0.3"/>
+  <circle cx="60" cy="135" r="1.5" fill="#58a6ff" opacity="0.2"/>
+  <circle cx="90" cy="165" r="1" fill="#a371f7" opacity="0.15"/>
+</svg>
