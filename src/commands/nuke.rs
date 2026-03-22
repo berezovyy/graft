@@ -1,11 +1,22 @@
 use std::fs;
 
-use crate::error::GraftError;
-use crate::overlay::{unmount_overlay, unmount_tmpfs};
+use super::drop;
+use crate::error::{GraftError, Result};
 use crate::state::State;
-use crate::workspace::graft_home;
+use crate::util::graft_home;
 
-pub fn run() -> Result<(), GraftError> {
+pub fn exec(args: crate::cli::NukeArgs) -> Result {
+    if !args.yes {
+        eprint!("this will destroy ALL workspaces and graft state. type 'yes' to confirm: ");
+        use std::io::{self, BufRead};
+        let mut line = String::new();
+        io::stdin().lock().read_line(&mut line).map_err(|e| GraftError::StateFailed(format!("failed to read confirmation: {e}")))?;
+        if line.trim() != "yes" {
+            println!("aborted");
+            return Ok(());
+        }
+    }
+
     let home = graft_home();
 
     if !home.exists() {
@@ -13,28 +24,27 @@ pub fn run() -> Result<(), GraftError> {
         return Ok(());
     }
 
-    // Try to load state and cleanly unmount everything.
-    // If state is corrupted or missing, skip unmount and just nuke the directory.
-    if let Ok(state) = State::load() {
-        let mut names: Vec<String> = state.list_workspaces().iter().map(|ws| ws.name.clone()).collect();
+    if let Ok(mut state) = State::load() {
+        let mut names = state.workspace_names();
         state.sorted_deepest_first(&mut names);
 
         for name in &names {
-            if let Some(ws) = state.get_workspace(name) {
-                let _ = unmount_overlay(&ws.merged);
-                if ws.tmpfs {
-                    let _ = unmount_tmpfs(&ws.upper);
-                    let _ = unmount_tmpfs(&ws.work);
-                }
+            if let Err(e) = drop::remove_workspace(&mut state, name) {
+                eprintln!("warning: failed to remove workspace '{}': {e}", name);
+            }
+        }
+
+        if let Some(ref proxy) = state.proxy {
+            if let Some(pid) = proxy.proxy_pid {
+                crate::util::kill_process(pid);
             }
         }
     }
 
     if fs::remove_dir_all(&home).is_err() {
-        // unmount may not release immediately; brief delay before retry
         std::thread::sleep(std::time::Duration::from_millis(100));
         fs::remove_dir_all(&home).map_err(|e| GraftError::Io {
-            context: format!("failed to remove graft home {}: {e}", home.display()),
+            context: format!("remove graft home {}", home.display()),
             source: e,
         })?;
     }

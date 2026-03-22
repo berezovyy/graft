@@ -1,30 +1,29 @@
-pub mod collapse;
+pub(crate) mod completions;
 pub mod diff;
 pub mod drop;
-pub mod enter;
+pub(crate) mod enter;
 pub mod fork;
 pub mod ls;
-pub mod merge;
+pub(crate) mod merge;
 pub mod nuke;
-pub mod path;
-pub mod snap;
-pub mod tree;
+pub(crate) mod run;
+pub(crate) mod switch;
 
 use crate::cli::{Cli, Commands};
-use crate::error::GraftError;
+use crate::error::Result;
 
-pub fn dispatch(cli: Cli) -> Result<(), GraftError> {
+pub fn dispatch(cli: Cli) -> Result {
     match cli.command {
-        Commands::Fork(args) => fork::run(args),
-        Commands::Drop(args) => drop::run(args),
-        Commands::Ls(_) => ls::run(),
-        Commands::Path(args) => path::run(args.name),
-        Commands::Diff(args) => diff::run(args),
-        Commands::Enter(args) => enter::run(args),
-        Commands::Merge(args) => merge::run(args),
-        Commands::Snap(args) => snap::run(args.action),
-        Commands::Tree(_) => tree::run(),
-        Commands::Collapse(args) => collapse::run(args.name),
-        Commands::Nuke(_) => nuke::run(),
+        Commands::Fork(args) => fork::exec(args),
+        Commands::Drop(args) => drop::exec(args),
+        Commands::Enter(args) => enter::exec(args),
+        Commands::Run(args) => run::exec(args),
+        Commands::Switch(args) => switch::exec(args),
+        Commands::Ls(args) => ls::exec(args),
+        Commands::Completions(args) => completions::exec(args.shell),
+        Commands::Diff(args) => diff::exec(args),
+        Commands::Merge(args) => merge::exec(args),
+        Commands::Nuke(args) => nuke::exec(args),
+        Commands::ProxyDaemon(args) => crate::proxy::run_proxy(args.port),
     }
 }

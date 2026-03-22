@@ -1,12 +1,10 @@
 pub mod cli;
-pub mod collapse;
 pub mod commands;
 pub mod diff;
 pub mod error;
 pub mod merge;
 pub mod overlay;
-pub mod snap;
+pub(crate) mod proxy;
 pub mod state;
-pub mod tree;
 pub mod util;
 pub mod workspace;

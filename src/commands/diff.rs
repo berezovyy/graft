@@ -1,22 +1,26 @@
 use crate::cli::DiffArgs;
 use crate::diff::{
-    format_diff, generate_unified_diff, walk_cumulative_upper, walk_upper, DiffMode, DiffOutput,
+    collect_changes, collect_changes_fast, collect_cumulative_changes,
+    collect_cumulative_changes_fast, format_diff, generate_unified_diff, DiffFormat, DiffOutput,
 };
-use crate::error::GraftError;
+use crate::error::{GraftError, Result};
 use crate::state::State;
 
-pub fn run(args: DiffArgs) -> Result<(), GraftError> {
+pub fn exec(args: DiffArgs) -> Result {
     let state = State::load()?;
     let workspace = state.require_workspace(&args.name)?;
 
-    if args.other.is_some() {
-        return Err(GraftError::NotImplemented);
-    }
-
+    let need_line_counts = !args.stat && !args.files;
     let changes = if args.cumulative {
-        walk_cumulative_upper(workspace, &state)?
+        if need_line_counts {
+            collect_cumulative_changes(workspace, &state)?
+        } else {
+            collect_cumulative_changes_fast(workspace, &state)?
+        }
+    } else if need_line_counts {
+        collect_changes(workspace)?
     } else {
-        walk_upper(workspace)?
+        collect_changes_fast(workspace)?
     };
 
     if changes.is_empty() {
@@ -26,50 +30,35 @@ pub fn run(args: DiffArgs) -> Result<(), GraftError> {
                 base: workspace.base.clone(),
                 changes: Vec::new(),
             };
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&output).unwrap_or_default()
-            );
+            println!("{}", serde_json::to_string_pretty(&output)
+                .map_err(|e| GraftError::Serialization(e.to_string()))?);
         } else {
             println!("clean — no changes");
         }
         return Ok(());
     }
 
-    let mode = if args.json {
-        DiffMode::Json
+    if args.json {
+        let output = DiffOutput {
+            workspace: args.name.clone(),
+            base: workspace.base.clone(),
+            changes,
+        };
+        println!("{}", serde_json::to_string_pretty(&output)
+                .map_err(|e| GraftError::Serialization(e.to_string()))?);
     } else if args.full {
-        DiffMode::Full
-    } else if args.files {
-        DiffMode::Files
-    } else if args.stat {
-        DiffMode::Stat
+        for change in &changes {
+            print!("{}", generate_unified_diff(workspace, change));
+        }
     } else {
-        DiffMode::Default
-    };
-
-    match mode {
-        DiffMode::Json => {
-            let output = DiffOutput {
-                workspace: args.name.clone(),
-                base: workspace.base.clone(),
-                changes,
-            };
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&output).unwrap_or_default()
-            );
-        }
-        DiffMode::Full => {
-            for change in &changes {
-                let udiff = generate_unified_diff(workspace, change);
-                print!("{udiff}");
-            }
-        }
-        _ => {
-            let output = format_diff(&changes, &mode);
-            println!("{output}");
-        }
+        let fmt = if args.files {
+            DiffFormat::Files
+        } else if args.stat {
+            DiffFormat::Stat
+        } else {
+            DiffFormat::Default
+        };
+        println!("{}", format_diff(&changes, &fmt));
     }
 
     Ok(())

@@ -1,14 +1,40 @@
 use std::fs;
+use std::io::BufRead;
 use std::path::PathBuf;
 
-use crate::error::GraftError;
+use crate::error::{GraftError, Result};
 use crate::overlay::{mount_overlay, OverlayOpts};
 use crate::state::State;
 use crate::util::IoContext;
 use crate::workspace::Workspace;
 
-/// Core fork logic: creates a new workspace with an overlay mount.
-/// Reusable by `enter --new`.
+fn apply_graftclean(merged: &std::path::Path) {
+    let cleanfile = merged.join(".graftclean");
+    let file = match fs::File::open(&cleanfile) {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    let mut cleaned = 0usize;
+    for line in std::io::BufReader::new(file).lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        let line = line.trim().to_string();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let target = merged.join(&line);
+        if target.exists() {
+            let _ = fs::remove_file(&target);
+            cleaned += 1;
+        }
+    }
+    if cleaned > 0 {
+        eprintln!("graftclean: removed {} overlay-incompatible file(s)", cleaned);
+    }
+}
+
 pub fn create_workspace(
     base: PathBuf,
     name: &str,
@@ -16,10 +42,13 @@ pub fn create_workspace(
     session: Option<String>,
     tmpfs: bool,
     size: Option<String>,
-) -> Result<Workspace, GraftError> {
+) -> Result<Workspace> {
     let (resolved_base, resolved_parent) = {
         let state = State::load()?;
-        if let Some(ws) = state.get_workspace(base.to_str().unwrap_or("")) {
+        if state.workspaces.contains_key(name) {
+            return Err(GraftError::WorkspaceExists(name.to_string()));
+        }
+        if let Some(ws) = state.workspaces.get(base.to_str().unwrap_or("")) {
             (ws.merged.clone(), Some(ws.name.clone()))
         } else {
             (base.clone(), parent)
@@ -76,11 +105,13 @@ pub fn create_workspace(
         let _ = fs::remove_dir_all(&ws.merged);
         let _ = fs::remove_dir_all(&ws.work);
         let _ = fs::remove_dir_all(&ws.upper);
-        // Also try to remove the workspace root dir if empty
-        let root = ws.upper.parent().unwrap();
-        let _ = fs::remove_dir(root);
+        if let Some(root) = ws.upper.parent() {
+            let _ = fs::remove_dir(root);
+        }
         return Err(e);
     }
+
+    apply_graftclean(&ws.merged);
 
     State::with_state(|state| {
         state.add_workspace(ws.clone())?;
@@ -90,8 +121,19 @@ pub fn create_workspace(
     Ok(ws)
 }
 
-pub fn run(args: crate::cli::ForkArgs) -> Result<(), GraftError> {
-    let ws = create_workspace(args.base, &args.name, None, args.session, args.tmpfs, args.size)?;
+pub fn exec(args: crate::cli::ForkArgs) -> Result {
+    let name = match args.name {
+        Some(n) => n,
+        None => args
+            .base
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| GraftError::InvalidArgument(
+                "cannot derive workspace name from path; use --name".to_string(),
+            ))?,
+    };
+    let ws = create_workspace(args.base, &name, None, args.session, args.tmpfs, args.size)?;
     println!("created workspace '{}' from {}", ws.name, ws.merged.display());
     Ok(())
 }

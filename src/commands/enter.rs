@@ -4,12 +4,11 @@ use std::process::Command;
 
 use crate::commands::{drop as drop_cmd, fork};
 use crate::diff;
-use crate::error::GraftError;
-use crate::merge::{self, MergeOpts};
+use crate::error::{GraftError, Result};
+use crate::merge;
 use crate::state::State;
 use crate::util::IoContext;
 
-/// Generate an ephemeral workspace name: "ephemeral-" + 8 hex chars.
 fn generate_ephemeral_name() -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -26,7 +25,6 @@ fn generate_ephemeral_name() -> String {
     format!("ephemeral-{:08x}", hash as u32)
 }
 
-/// Read a single character from stdin (blocking).
 fn read_single_char() -> Option<char> {
     let mut buf = [0u8; 1];
     match io::stdin().read_exact(&mut buf) {
@@ -35,52 +33,51 @@ fn read_single_char() -> Option<char> {
     }
 }
 
-pub fn run(args: crate::cli::EnterArgs) -> Result<(), GraftError> {
-    let ws_name = if args.ephemeral {
-        let eph_name = args.name.unwrap_or_else(generate_ephemeral_name);
+fn drop_workspace_by_name(name: &str) -> Result {
+    State::with_state(|state| {
+        drop_cmd::remove_workspace(state, name)?;
+        Ok(())
+    })
+}
 
-        let base = match args.from {
-            Some(ref f) => PathBuf::from(f),
-            None => PathBuf::from("."),
+pub fn exec(args: crate::cli::EnterArgs) -> Result {
+    let ws_name = if args.ephemeral || args.create {
+        let name = if let Some(n) = args.name.clone() {
+            n
+        } else if args.ephemeral {
+            generate_ephemeral_name()
+        } else {
+            return Err(GraftError::InvalidArgument(
+                "workspace name required when using --new".to_string(),
+            ));
         };
 
-        let mut ws = fork::create_workspace(base, &eph_name, None, None, args.tmpfs, None)?;
-        ws.ephemeral = true;
+        let base = args
+            .from
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
 
-        State::with_state(|state| {
-            if let Some(stored) = state.get_workspace_mut(&eph_name) {
-                stored.ephemeral = true;
-            }
-            Ok(())
-        })?;
+        let ws = fork::create_workspace(base, &name, None, None, args.tmpfs, None)?;
 
-        println!(
-            "created ephemeral workspace '{}' from {}",
-            ws.name,
-            ws.merged.display()
-        );
+        if args.ephemeral {
+            State::with_state(|state| {
+                if let Some(stored) = state.workspaces.get_mut(&name) {
+                    stored.ephemeral = true;
+                }
+                Ok(())
+            })?;
+        }
 
-        eph_name
-    } else if args.create {
-        let ws_name = args.name.ok_or_else(|| {
-            GraftError::InvalidArgument("workspace name required when using --new".to_string())
-        })?;
-
-        let base = match args.from {
-            Some(ref f) => PathBuf::from(f),
-            None => PathBuf::from("."),
-        };
-
-        let ws = fork::create_workspace(base, &ws_name, None, None, args.tmpfs, None)?;
         println!(
             "created workspace '{}' from {}",
             ws.name,
             ws.merged.display()
         );
 
-        ws_name
+        name
     } else {
-        args.name.ok_or_else(|| {
+        args.name.clone().ok_or_else(|| {
             GraftError::InvalidArgument(
                 "workspace name required — use --new to create one".to_string(),
             )
@@ -104,6 +101,10 @@ pub fn run(args: crate::cli::EnterArgs) -> Result<(), GraftError> {
         .env("GRAFT_BASE", &workspace.base)
         .env("GRAFT_UPPER", &workspace.upper);
 
+    if let Some(ref sess) = args.session.or_else(|| workspace.session.clone()) {
+        cmd.env("GRAFT_SESSION", sess);
+    }
+
     let status = cmd.status().io_context(|| "failed to spawn command".to_string())?;
 
     if status.success() {
@@ -113,18 +114,14 @@ pub fn run(args: crate::cli::EnterArgs) -> Result<(), GraftError> {
         eprintln!("left '{}' (exit code {})", ws_name, code);
     }
 
-    // Handle merge-on-exit before ephemeral drop
     if args.merge_on_exit {
-        // Re-load workspace from state (fresh read)
         let state = State::load()?;
         let workspace = state.require_workspace(&ws_name)?;
-
-        let changes = diff::walk_upper(workspace)?;
+        let changes = diff::collect_changes(workspace)?;
 
         if changes.is_empty() {
             println!("clean — no changes to merge");
         } else {
-            // Print summary
             let total_add: usize = changes.iter().filter_map(|c| c.additions).sum();
             let total_del: usize = changes.iter().filter_map(|c| c.deletions).sum();
             println!(
@@ -136,31 +133,18 @@ pub fn run(args: crate::cli::EnterArgs) -> Result<(), GraftError> {
             eprint!("[m]erge  [d]rop  [k]eep workspace? ");
 
             let choice = read_single_char().unwrap_or('k');
-            eprintln!(); // newline after single-char read
+            eprintln!();
 
             match choice {
                 'm' => {
-                    let opts = MergeOpts {
-                        commit: false,
-                        message: None,
-                        drop: false,
-                        patch: false,
-                        no_install: true,
-                    };
-                    merge::merge_workspace(workspace, &opts)?;
+                    merge::merge_workspace(workspace)?;
                     println!("merged changes into base");
-                    State::with_state(|state| {
-                        drop_cmd::remove_workspace(state, &ws_name)?;
-                        Ok(())
-                    })?;
+                    drop_workspace_by_name(&ws_name)?;
                     println!("removed '{}' after merge", ws_name);
                     return Ok(());
                 }
                 'd' => {
-                    State::with_state(|state| {
-                        drop_cmd::remove_workspace(state, &ws_name)?;
-                        Ok(())
-                    })?;
+                    drop_workspace_by_name(&ws_name)?;
                     println!("removed");
                     return Ok(());
                 }
@@ -171,12 +155,8 @@ pub fn run(args: crate::cli::EnterArgs) -> Result<(), GraftError> {
         }
     }
 
-    // If ephemeral, automatically drop the workspace
     if args.ephemeral {
-        State::with_state(|state| {
-            drop_cmd::remove_workspace(state, &ws_name)?;
-            Ok(())
-        })?;
+        drop_workspace_by_name(&ws_name)?;
         println!("ephemeral workspace removed");
     }
 

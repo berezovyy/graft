@@ -1,13 +1,27 @@
-use crate::error::GraftError;
-use std::path::Path;
+use crate::error::{GraftError, Result};
+use std::path::{Path, PathBuf};
 
-/// Extension trait for adding context to IO errors.
-pub trait IoContext<T> {
-    fn io_context(self, ctx: impl FnOnce() -> String) -> Result<T, GraftError>;
+pub fn now_rfc3339() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
+}
+
+pub fn graft_home() -> PathBuf {
+    if let Ok(home) = std::env::var("GRAFT_HOME") {
+        PathBuf::from(home)
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        PathBuf::from(home).join(".graft")
+    }
+}
+
+pub(crate) trait IoContext<T> {
+    fn io_context(self, ctx: impl FnOnce() -> String) -> Result<T>;
 }
 
 impl<T> IoContext<T> for std::io::Result<T> {
-    fn io_context(self, ctx: impl FnOnce() -> String) -> Result<T, GraftError> {
+    fn io_context(self, ctx: impl FnOnce() -> String) -> Result<T> {
         self.map_err(|e| GraftError::Io {
             context: ctx(),
             source: e,
@@ -15,13 +29,12 @@ impl<T> IoContext<T> for std::io::Result<T> {
     }
 }
 
-/// Extension trait for converting walkdir errors into GraftError.
-pub trait WalkDirExt {
-    fn to_graft_err(self, dir: &Path) -> Result<walkdir::DirEntry, GraftError>;
+pub(crate) trait WalkDirExt {
+    fn walk_context(self, dir: &Path) -> Result<walkdir::DirEntry>;
 }
 
-impl WalkDirExt for Result<walkdir::DirEntry, walkdir::Error> {
-    fn to_graft_err(self, dir: &Path) -> Result<walkdir::DirEntry, GraftError> {
+impl WalkDirExt for std::result::Result<walkdir::DirEntry, walkdir::Error> {
+    fn walk_context(self, dir: &Path) -> Result<walkdir::DirEntry> {
         self.map_err(|e| {
             let source = e.into_io_error().unwrap_or_else(|| {
                 std::io::Error::other("directory walk error")
@@ -34,8 +47,7 @@ impl WalkDirExt for Result<walkdir::DirEntry, walkdir::Error> {
     }
 }
 
-/// Create parent directories for a path if they don't exist.
-pub fn ensure_parent_dir(path: &Path) -> Result<(), GraftError> {
+pub(crate) fn ensure_parent_dir(path: &Path) -> Result {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).io_context(|| {
             format!("create parent directory {}", parent.display())
@@ -44,53 +56,55 @@ pub fn ensure_parent_dir(path: &Path) -> Result<(), GraftError> {
     Ok(())
 }
 
-/// Recursively copy a directory tree from src to dst, with an optional filename filter.
-/// If `skip` returns true for a filename, that entry is skipped.
-pub fn recursive_copy(
-    src: &Path,
-    dst: &Path,
-    skip: impl Fn(&str) -> bool,
-) -> Result<(), GraftError> {
-    std::fs::create_dir_all(dst).io_context(|| format!("create directory {}", dst.display()))?;
+pub(crate) fn is_pid_alive(pid: u32) -> bool {
+    if pid == 0 || pid == 1 || pid > i32::MAX as u32 {
+        return false;
+    }
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
 
-    for entry in walkdir::WalkDir::new(src).min_depth(1) {
-        let entry = entry.to_graft_err(src)?;
-        let rel = entry.path().strip_prefix(src).expect("entry must be under src");
+pub(crate) fn glob_matches(pattern: &str, text: &str) -> bool {
+    fn do_match(pat: &[char], txt: &[char]) -> bool {
+        let (mut p, mut t) = (0, 0);
+        let (mut star_p, mut star_t) = (usize::MAX, 0);
 
-        if let Some(name) = rel.file_name().and_then(|n| n.to_str()) {
-            if skip(name) {
-                continue;
+        while t < txt.len() {
+            if p < pat.len() && (pat[p] == '?' || pat[p] == txt[t]) {
+                p += 1;
+                t += 1;
+            } else if p < pat.len() && pat[p] == '*' {
+                star_p = p;
+                star_t = t;
+                p += 1;
+            } else if star_p != usize::MAX {
+                p = star_p + 1;
+                star_t += 1;
+                t = star_t;
+            } else {
+                return false;
             }
         }
-
-        let target = dst.join(rel);
-        if entry.file_type().is_dir() {
-            std::fs::create_dir_all(&target)
-                .io_context(|| format!("create directory {}", target.display()))?;
-        } else {
-            ensure_parent_dir(&target)?;
-            std::fs::copy(entry.path(), &target).io_context(|| {
-                format!("copy {} -> {}", entry.path().display(), target.display())
-            })?;
+        while p < pat.len() && pat[p] == '*' {
+            p += 1;
         }
-    }
-    Ok(())
-}
-
-/// Parsed OverlayFS whiteout entry.
-pub enum Whiteout {
-    /// Opaque directory marker (.wh..wh..opq) — hides all lower entries in this dir
-    Opaque,
-    /// File/dir deletion marker (.wh.<name>) — hides a specific lower entry
-    Deletion(String),
-}
-
-impl Whiteout {
-    /// Parse a filename into a whiteout type, if it is one.
-    pub fn parse(filename: &str) -> Option<Whiteout> {
-        if filename == ".wh..wh..opq" {
-            Some(Whiteout::Opaque)
-        } else { filename.strip_prefix(".wh.").map(|original| Whiteout::Deletion(original.to_string())) }
+        p == pat.len()
     }
 
+    let pat_chars: Vec<char> = pattern.chars().collect();
+    let txt_chars: Vec<char> = text.chars().collect();
+    do_match(&pat_chars, &txt_chars)
+}
+
+pub(crate) fn kill_process(pid: u32) {
+    if pid == 0 || pid == 1 || pid > i32::MAX as u32 {
+        return;
+    }
+    // Negate to signal the entire process group (kills sh -c wrapper children too)
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGTERM);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
+    }
 }
