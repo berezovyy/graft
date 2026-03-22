@@ -13,16 +13,16 @@ project/                graft fork . --name experiment
                                                          only this file is stored
 ```
 
-One command gives you an isolated copy of any directory. No actual copying happens — it uses OverlayFS (the same thing Docker uses internally) to layer a thin writable surface over your existing files. Only what you change gets stored.
+One command gives you an isolated copy of any directory. No actual copying happens - it uses OverlayFS (the same thing Docker uses internally) to layer a thin writable surface over your existing files. Only what you change gets stored.
 
 ## Why
 
 AI coding agents need to experiment. Try approach A, try approach B, run tests, compare, pick a winner. Current options are bad:
 
-- **Working in-place** — no isolation, can't run parallel experiments
-- **Copying the project** — slow, especially with `node_modules` (500MB+)
-- **Docker** — overkill for "let me try something real quick"
-- **Git worktrees** — still copies the working tree, doesn't capture build artifacts or configs
+- **Working in-place** - no isolation, can't run parallel experiments
+- **Copying the project** - slow, especially with `node_modules` (500MB+)
+- **Docker** - overkill for "let me try something real quick"
+- **Git worktrees** - still copies the working tree, doesn't capture build artifacts or configs
 
 There was no simple tool that says: give me a cheap parallel universe of this directory.
 
@@ -51,7 +51,7 @@ If mounting fails, graft tells you exactly what's wrong and how to fix it.
 # fork a project directory
 graft fork . --name experiment
 
-# enter it — opens a shell inside the overlay
+# enter it - opens a shell inside the overlay
 graft enter experiment
 
 # make changes, break things, go wild
@@ -148,21 +148,17 @@ merged/    ← you work here (reads from both layers)
   └── lower/   ← original project (read-only, untouched)
 ```
 
-When you read a file, it comes from the original. When you write, the file is copied to upper first (copy-on-write), then modified there. The original never changes. Deletes are tracked as whiteout markers. The upper directory _is_ the diff — no diffing algorithm needed.
+When you read a file, it comes from the original. When you write, the file is copied to upper first (copy-on-write), then modified there. The original never changes. Deletes are tracked as whiteout markers. The upper directory _is_ the diff - no diffing algorithm needed.
 
 Forking is instant (~5ms) because nothing is copied. Merging moves files from upper back to the base. Dropping unmounts and deletes the upper.
-
-## Philosophy
-
-Linux already solved isolation. OverlayFS for files, network namespaces for ports, cgroups for resources, Landlock for sandboxing, pidfd for process control. Docker wraps all of these in a heavy abstraction — images, daemons, registries, Dockerfiles. Graft uses the same kernel primitives directly, composing just what you need, without the container overhead.
-
-Today graft uses OverlayFS for file isolation. Next: network namespaces for port isolation (each sandbox gets its own `:3000`), cgroup.freeze for instant process suspend/resume, and a dev server proxy for switching between running sandboxes in the browser.
 
 ## Requirements
 
 - Linux (OverlayFS is a Linux kernel feature)
 - `fuse-overlayfs` and `fuse3` installed
 - No root/sudo needed
+
+Now let's create a separate folder, with multi file and multi phases plan to implement Network isolation │ Designed, not implemented │
 
 ## License
 
