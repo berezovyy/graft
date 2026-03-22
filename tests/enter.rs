@@ -3,19 +3,9 @@ mod common;
 use std::path::PathBuf;
 use std::process::Command;
 
-use graft::error::GraftError;
 use graft::state::State;
 use serial_test::serial;
 
-// Helper: create workspace with convenient defaults
-fn fork_helper(
-    base: PathBuf,
-    name: &str,
-) -> Result<graft::workspace::Workspace, GraftError> {
-    graft::commands::fork::create_workspace(base, name, None, None, false, None)
-}
-
-/// Get path to the built graft binary
 fn graft_bin() -> PathBuf {
     let mut path = std::env::current_exe()
         .unwrap()
@@ -32,11 +22,9 @@ fn graft_bin() -> PathBuf {
 #[serial]
 fn test_enter_command_passthrough() {
     skip_without_overlay!();
-    let _dir = common::setup_test_env();
-    let base = tempfile::tempdir().unwrap();
-    common::create_test_project(base.path());
+    let (_dir, base) = common::setup_with_project();
 
-    let ws = fork_helper(base.path().to_path_buf(), "enter-cmd-ws").unwrap();
+    let ws = common::fork_helper(base.path().to_path_buf(), "enter-cmd-ws", None, None).unwrap();
 
     let output = Command::new(graft_bin())
         .env("GRAFT_HOME", std::env::var("GRAFT_HOME").unwrap())
@@ -59,11 +47,9 @@ fn test_enter_command_passthrough() {
 #[serial]
 fn test_enter_env_vars() {
     skip_without_overlay!();
-    let _dir = common::setup_test_env();
-    let base = tempfile::tempdir().unwrap();
-    common::create_test_project(base.path());
+    let (_dir, base) = common::setup_with_project();
 
-    let ws = fork_helper(base.path().to_path_buf(), "enter-env-ws").unwrap();
+    let ws = common::fork_helper(base.path().to_path_buf(), "enter-env-ws", None, None).unwrap();
 
     let output = Command::new(graft_bin())
         .env("GRAFT_HOME", std::env::var("GRAFT_HOME").unwrap())
@@ -92,11 +78,9 @@ fn test_enter_env_vars() {
 #[serial]
 fn test_enter_env_base() {
     skip_without_overlay!();
-    let _dir = common::setup_test_env();
-    let base = tempfile::tempdir().unwrap();
-    common::create_test_project(base.path());
+    let (_dir, base) = common::setup_with_project();
 
-    let ws = fork_helper(base.path().to_path_buf(), "enter-base-ws").unwrap();
+    let ws = common::fork_helper(base.path().to_path_buf(), "enter-base-ws", None, None).unwrap();
 
     let base_canonical = base.path().canonicalize().unwrap();
 
@@ -174,9 +158,7 @@ fn test_enter_no_name() {
 #[serial]
 fn test_enter_new_creates_workspace() {
     skip_without_overlay!();
-    let _dir = common::setup_test_env();
-    let base = tempfile::tempdir().unwrap();
-    common::create_test_project(base.path());
+    let (_dir, base) = common::setup_with_project();
 
     let output = Command::new(graft_bin())
         .env("GRAFT_HOME", std::env::var("GRAFT_HOME").unwrap())
@@ -207,7 +189,7 @@ fn test_enter_new_creates_workspace() {
 
     // Verify workspace was created in state
     let state = State::load().unwrap();
-    let ws = state.get_workspace("new-enter-ws");
+    let ws = state.workspaces.get("new-enter-ws");
     assert!(ws.is_some(), "workspace 'new-enter-ws' should exist in state");
 
     // Clean up
@@ -220,32 +202,13 @@ fn test_enter_new_creates_workspace() {
 
 #[test]
 #[serial]
-fn test_ephemeral_name_generation() {
-    // Test that ephemeral name generation produces expected format
-    // We can't call the private function directly, but we can test via the CLI
-    let _dir = common::setup_test_env();
-
-    // Verify the format: "ephemeral-" followed by 8 hex chars
-    // We test this indirectly by checking workspace naming pattern
-    let name = "ephemeral-abcdef01";
-    assert!(name.starts_with("ephemeral-"));
-    assert_eq!(name.len(), "ephemeral-".len() + 8);
-}
-
-#[test]
-#[serial]
 fn test_ephemeral_flag_recorded_in_state() {
-    // Test that ephemeral flag is properly set on workspace struct
-    let _dir = common::setup_test_env();
-    let base = tempfile::tempdir().unwrap();
-    common::create_test_project(base.path());
+    let (_dir, base) = common::setup_with_project();
 
     let mut ws = graft::workspace::Workspace::new("eph-test", base.path().to_path_buf(), None);
-    assert!(!ws.ephemeral); // default is false
+    assert!(!ws.ephemeral);
     ws.ephemeral = true;
-    assert!(ws.ephemeral);
 
-    // Test serialization round-trip
     let json = serde_json::to_string(&ws).unwrap();
     let deserialized: graft::workspace::Workspace = serde_json::from_str(&json).unwrap();
     assert!(deserialized.ephemeral);
@@ -254,7 +217,6 @@ fn test_ephemeral_flag_recorded_in_state() {
 #[test]
 #[serial]
 fn test_ephemeral_state_without_ephemeral_field() {
-    // Test that deserializing old state without ephemeral field defaults to false
     let _dir = common::setup_test_env();
 
     let json = r#"{
@@ -279,9 +241,7 @@ fn test_ephemeral_state_without_ephemeral_field() {
 #[serial]
 fn test_enter_ephemeral_with_overlay() {
     skip_without_overlay!();
-    let _dir = common::setup_test_env();
-    let base = tempfile::tempdir().unwrap();
-    common::create_test_project(base.path());
+    let (_dir, base) = common::setup_with_project();
 
     let output = Command::new(graft_bin())
         .env("GRAFT_HOME", std::env::var("GRAFT_HOME").unwrap())
@@ -318,7 +278,7 @@ fn test_enter_ephemeral_with_overlay() {
 
     // Verify workspace was cleaned up (no ephemeral workspaces in state)
     let state = State::load().unwrap();
-    let workspaces = state.list_workspaces();
+    let workspaces = state.workspaces.values().collect::<Vec<_>>();
     for ws in workspaces {
         assert!(
             !ws.name.starts_with("ephemeral-"),
@@ -332,9 +292,7 @@ fn test_enter_ephemeral_with_overlay() {
 #[serial]
 fn test_enter_ephemeral_with_name() {
     skip_without_overlay!();
-    let _dir = common::setup_test_env();
-    let base = tempfile::tempdir().unwrap();
-    common::create_test_project(base.path());
+    let (_dir, base) = common::setup_with_project();
 
     let output = Command::new(graft_bin())
         .env("GRAFT_HOME", std::env::var("GRAFT_HOME").unwrap())
@@ -371,7 +329,7 @@ fn test_enter_ephemeral_with_name() {
     // Verify workspace is gone from state
     let state = State::load().unwrap();
     assert!(
-        state.get_workspace("my-eph-ws").is_none(),
+        state.workspaces.get("my-eph-ws").is_none(),
         "ephemeral workspace 'my-eph-ws' should have been dropped"
     );
 }

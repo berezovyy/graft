@@ -9,7 +9,7 @@ use serial_test::serial;
 
 fn make_workspace(name: &str, parent: Option<String>) -> Workspace {
     let base = PathBuf::from("/tmp/base");
-    let root = graft::workspace::graft_home();
+    let root = graft::util::graft_home();
     common::make_test_workspace(&root, name, &base, parent)
 }
 
@@ -30,7 +30,7 @@ fn test_add_and_get_workspace() {
     let ws = make_workspace("test-ws", None);
     state.add_workspace(ws).unwrap();
 
-    let ws = state.get_workspace("test-ws");
+    let ws = state.workspaces.get("test-ws");
     assert!(ws.is_some());
     assert_eq!(ws.unwrap().name, "test-ws");
 }
@@ -52,10 +52,10 @@ fn test_remove_workspace() {
     let _dir = common::setup_test_env();
     let mut state = State::load().unwrap();
     state.add_workspace(make_workspace("rm-me", None)).unwrap();
-    assert!(state.get_workspace("rm-me").is_some());
+    assert!(state.workspaces.get("rm-me").is_some());
 
     state.remove_workspace("rm-me").unwrap();
-    assert!(state.get_workspace("rm-me").is_none());
+    assert!(state.workspaces.get("rm-me").is_none());
 }
 
 #[test]
@@ -77,7 +77,7 @@ fn test_list_workspaces() {
     state.add_workspace(make_workspace("b", None)).unwrap();
     state.add_workspace(make_workspace("c", None)).unwrap();
 
-    let list = state.list_workspaces();
+    let list = state.workspaces.values().collect::<Vec<_>>();
     assert_eq!(list.len(), 3);
 
     let mut names: Vec<&str> = list.iter().map(|ws| ws.name.as_str()).collect();
@@ -92,10 +92,10 @@ fn test_update_workspace() {
     let mut state = State::load().unwrap();
     state.add_workspace(make_workspace("upd", None)).unwrap();
 
-    let ws = state.get_workspace_mut("upd").unwrap();
+    let ws = state.workspaces.get_mut("upd").unwrap();
     ws.tmpfs = true;
 
-    let ws = state.get_workspace("upd").unwrap();
+    let ws = state.workspaces.get("upd").unwrap();
     assert!(ws.tmpfs);
 }
 
@@ -156,7 +156,6 @@ fn test_parent_chain() {
     let names: Vec<&str> = chain.iter().map(|ws| ws.name.as_str()).collect();
     assert_eq!(names, vec!["grandparent", "parent", "child"]);
 
-    // Root has chain of just itself
     let chain = state.parent_chain("grandparent");
     let names: Vec<&str> = chain.iter().map(|ws| ws.name.as_str()).collect();
     assert_eq!(names, vec!["grandparent"]);
@@ -166,9 +165,10 @@ fn test_parent_chain() {
 #[serial]
 fn test_save_creates_dirs() {
     let dir = common::setup_test_env();
-    // Point GRAFT_HOME to a nested path that doesn't exist yet
     let nested = dir.path().join("a").join("b").join("c");
-    std::env::set_var("GRAFT_HOME", &nested);
+    // SAFETY: this test is serialized with #[serial], so no concurrent
+    // env var mutation can occur.
+    unsafe { std::env::set_var("GRAFT_HOME", &nested) };
 
     let state = State::default();
     state.save().unwrap();
@@ -191,9 +191,9 @@ fn test_state_persistence() {
     {
         let state = State::load().unwrap();
         assert_eq!(state.workspaces.len(), 2);
-        let ws = state.get_workspace("persist").unwrap();
+        let ws = state.workspaces.get("persist").unwrap();
         assert_eq!(ws.name, "persist");
-        let child = state.get_workspace("persist-child").unwrap();
+        let child = state.workspaces.get("persist-child").unwrap();
         assert_eq!(child.parent.as_deref(), Some("persist"));
     }
 }
